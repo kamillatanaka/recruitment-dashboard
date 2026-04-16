@@ -75,7 +75,11 @@ def _get(endpoint, params=None):
             try:
                 with _lever_session() as s:
                     resp = s.get(f"{BASE_URL}/{endpoint}", params=p)
-                resp.raise_for_status()
+                if not resp.ok:
+                    raise requests.exceptions.HTTPError(
+                        f"HTTP {resp.status_code} on {endpoint}: {resp.text[:300]}",
+                        response=resp,
+                    )
                 break
             except requests.exceptions.SSLError:
                 if attempt == 2:
