@@ -33,8 +33,12 @@ def _lever_session():
     s = requests.Session()
     s.headers["Connection"] = "close"
     s.verify = False
-    s.auth = (_get_lever_key(), "")
-    # Retry on connection errors (not SSL, handled separately)
+    key = _get_lever_key()
+    # JWT tokens (start with 'eyJ') use Bearer auth; classic API keys use Basic auth
+    if key.startswith("eyJ"):
+        s.headers["Authorization"] = f"Bearer {key}"
+    else:
+        s.auth = (key, "")
     adapter = HTTPAdapter(max_retries=2)
     s.mount("https://", adapter)
     return s
