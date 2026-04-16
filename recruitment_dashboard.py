@@ -81,6 +81,32 @@ BLACK  = "#212121"
 WHITE  = "#FFFFFF"
 BORDER = "#E8D9B5"
 
+# ── Country mapping ───────────────────────────────────────────────────────────
+
+_COUNTRY_KEYWORDS = {
+    "🇧🇷 Brazil":    ["brazil", "brasil", "são paulo", "sao paulo", "rio de janeiro",
+                      "belo horizonte", "brasilia", "brasília", "latam - brazil", "br"],
+    "🇲🇽 Mexico":    ["mexico", "méxico", "cdmx", "guadalajara", "monterrey"],
+    "🇨🇴 Colombia":  ["colombia", "bogotá", "bogota", "medellín", "medellin"],
+    "🇦🇷 Argentina": ["argentina", "buenos aires"],
+    "🇺🇸 USA":       ["usa", "united states", "new york", "san francisco", "chicago",
+                      "austin", "los angeles", "seattle", "boston", "remote - us",
+                      "remote, us", "us remote"],
+    "🇮🇳 India":     ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
+                      "chennai", "pune"],
+    "🌍 Europe":     ["europe", "uk", "united kingdom", "london", "berlin", "paris",
+                      "amsterdam", "madrid", "barcelona", "dublin", "lisbon", "lisboa",
+                      "rome", "milan", "warsaw", "stockholm", "remote - europe",
+                      "remote, europe"],
+}
+
+def _map_country(location: str) -> str:
+    loc = (location or "").lower()
+    for country, keywords in _COUNTRY_KEYWORDS.items():
+        if any(kw in loc for kw in keywords):
+            return country
+    return "🌐 Other"
+
 # ── API helpers ───────────────────────────────────────────────────────────────
 
 def _get(endpoint, params=None):
@@ -123,11 +149,13 @@ def load_data():
     posting_map = {}
     for p in postings:
         cat = p.get("categories") or {}
+        loc = cat.get("location") or "Unknown"
         posting_map[p["id"]] = {
             "title":      p.get("text", "Unknown"),
             "team":       cat.get("team") or "Unknown",
             "department": cat.get("department") or "Unknown",
-            "location":   cat.get("location") or "Unknown",
+            "location":   loc,
+            "country":    _map_country(loc),
             "hm_id":      p.get("hiringManager"),
             "owner_id":   p.get("owner"),
         }
@@ -192,11 +220,12 @@ def build_pipeline_df(active, posting_map, user_map, stage_map):
             "Recruiter":      user_map.get(opp.get("owner"), "Unknown"),
             "Hiring Manager": user_map.get(post.get("hm_id"), "Unknown"),
             "Director":       user_map.get(post.get("owner_id"), "Unknown"),
+            "Country":        post.get("country", "🌐 Other"),
             "Archived":       False,
         })
 
     cols = ["Candidate", "Profile", "Role", "Team", "Stage",
-            "Days in Stage", "Recruiter", "Hiring Manager", "Director", "Archived"]
+            "Days in Stage", "Recruiter", "Hiring Manager", "Director", "Country", "Archived"]
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -465,28 +494,47 @@ with vc2:
     elif view_mode == "🎖️ By Director":
         sel_director = st.selectbox("Director", directors_all, label_visibility="collapsed")
 
+# ── Country filter ─────────────────────────────────────────────────────────────
+_all_countries = list(_COUNTRY_KEYWORDS.keys()) + ["🌐 Other"]
+sel_countries = st.multiselect(
+    "🌍 Filter by Country",
+    options=_all_countries,
+    default=[],
+    placeholder="All countries",
+    label_visibility="collapsed",
+)
+
+# Apply country filter to pipeline_df before view-specific filtering
+_base_df = (pipeline_df[pipeline_df["Country"].isin(sel_countries)].copy()
+            if sel_countries else pipeline_df.copy())
+
 # ── Filter ────────────────────────────────────────────────────────────────────
+_country_postings = (
+    [p for p in postings if posting_map.get(p["id"], {}).get("country") in sel_countries]
+    if sel_countries else postings
+)
+
 if view_mode == "🌐 All Positions":
-    vdf        = pipeline_df.copy()
-    v_postings = postings
+    vdf        = _base_df.copy()
+    v_postings = _country_postings
 elif view_mode == "💼 By Role" and sel_role:
-    vdf        = pipeline_df[pipeline_df["Role"] == sel_role].copy()
-    v_postings = [p for p in postings
+    vdf        = _base_df[_base_df["Role"] == sel_role].copy()
+    v_postings = [p for p in _country_postings
                   if posting_map.get(p["id"], {}).get("title") == sel_role]
 elif view_mode == "👤 By Hiring Manager" and sel_hm:
-    vdf        = pipeline_df[pipeline_df["Hiring Manager"] == sel_hm].copy()
-    v_postings = [p for p in postings
+    vdf        = _base_df[_base_df["Hiring Manager"] == sel_hm].copy()
+    v_postings = [p for p in _country_postings
                   if user_map.get(posting_map.get(p["id"], {}).get("hm_id")) == sel_hm]
 elif view_mode == "👩‍💼 By Recruiter" and sel_rec:
-    vdf        = pipeline_df[pipeline_df["Recruiter"] == sel_rec].copy()
-    v_postings = postings  # recruiters span multiple postings
+    vdf        = _base_df[_base_df["Recruiter"] == sel_rec].copy()
+    v_postings = _country_postings
 elif view_mode == "🎖️ By Director" and sel_director:
-    vdf        = pipeline_df[pipeline_df["Director"] == sel_director].copy()
-    v_postings = [p for p in postings
+    vdf        = _base_df[_base_df["Director"] == sel_director].copy()
+    v_postings = [p for p in _country_postings
                   if user_map.get(posting_map.get(p["id"], {}).get("owner_id")) == sel_director]
 else:
-    vdf        = pipeline_df.copy()
-    v_postings = postings
+    vdf        = _base_df.copy()
+    v_postings = _country_postings
 
 # ── KPI Cards ─────────────────────────────────────────────────────────────────
 _section_label("📈 Key Metrics")
@@ -617,7 +665,7 @@ with tab_pipeline:
                 with st.expander(f"**{stage}** · {len(sdf)} candidate(s){badge}", expanded=True):
                     st.dataframe(
                         sdf[["Candidate", "Profile", "Role", "Team",
-                             "Days in Stage", "Recruiter", "Hiring Manager", "Director"]],
+                             "Days in Stage", "Recruiter", "Hiring Manager", "Director", "Country"]],
                         use_container_width=True,
                         hide_index=True,
                         column_config={
@@ -682,7 +730,7 @@ with tab_kanban:
         )
         if k_view == "💼 By Role":
             k_role = st.selectbox("Select Role", roles_all, key="kanban_role")
-            kdf = pipeline_df[pipeline_df["Role"] == k_role].copy()
+            kdf = _base_df[_base_df["Role"] == k_role].copy()
             if show_archived:
                 arch_opps = []
                 for pid in _role_to_pids.get(k_role, []):
@@ -693,7 +741,7 @@ with tab_kanban:
                     kdf = pd.concat([kdf, adf[adf["Role"] == k_role]], ignore_index=True)
         elif k_view == "👤 By Hiring Manager":
             k_hm = st.selectbox("Select Hiring Manager", hms_all, key="kanban_hm")
-            kdf = pipeline_df[pipeline_df["Hiring Manager"] == k_hm].copy()
+            kdf = _base_df[_base_df["Hiring Manager"] == k_hm].copy()
             if show_archived:
                 arch_opps = []
                 for pid in _hm_to_pids.get(k_hm, []):
@@ -704,10 +752,10 @@ with tab_kanban:
                     kdf = pd.concat([kdf, adf[adf["Hiring Manager"] == k_hm]], ignore_index=True)
         elif k_view == "👩‍💼 By Recruiter":
             k_rec = st.selectbox("Select Recruiter", recs_all, key="kanban_rec")
-            kdf = pipeline_df[pipeline_df["Recruiter"] == k_rec].copy()
+            kdf = _base_df[_base_df["Recruiter"] == k_rec].copy()
         else:
             k_dir = st.selectbox("Select Director", directors_all, key="kanban_dir")
-            kdf = pipeline_df[pipeline_df["Director"] == k_dir].copy()
+            kdf = _base_df[_base_df["Director"] == k_dir].copy()
             if show_archived:
                 arch_opps = []
                 for pid in _director_to_pids.get(k_dir, []):
