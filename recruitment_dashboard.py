@@ -209,7 +209,11 @@ with st.sidebar:
     st.caption("Auto-refreshes every 5 minutes.")
 
 with st.spinner("Loading data from Lever…"):
-    postings, posting_map, user_map, stage_map, active = load_data()
+    try:
+        postings, posting_map, user_map, stage_map, active = load_data()
+    except Exception as e:
+        st.error(f"**API Error:** {e}")
+        st.stop()
 
 pipeline_df = build_pipeline_df(active, posting_map, user_map, stage_map)
 
