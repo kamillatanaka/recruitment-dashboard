@@ -28,24 +28,24 @@ def _get_lever_key():
         return os.environ.get("LEVER_API_KEY", "")
 
 
+# ── Config ───────────────────────────────────────────────────────────────────
+
+LEVER_API_KEY = _get_lever_key()
+
+
 def _lever_session():
     """Session that closes connections after each use to avoid LibreSSL EOF errors."""
     s = requests.Session()
     s.headers["Connection"] = "close"
     s.verify = False
-    key = _get_lever_key()
-    # JWT tokens (start with 'eyJ') use Bearer auth; classic API keys use Basic auth
-    if key.startswith("eyJ"):
-        s.headers["Authorization"] = f"Bearer {key}"
+    # Use module-level LEVER_API_KEY (resolved once at startup, thread-safe)
+    if LEVER_API_KEY.startswith("eyJ"):
+        s.headers["Authorization"] = f"Bearer {LEVER_API_KEY}"
     else:
-        s.auth = (key, "")
+        s.auth = (LEVER_API_KEY, "")
     adapter = HTTPAdapter(max_retries=2)
     s.mount("https://", adapter)
     return s
-
-# ── Config ───────────────────────────────────────────────────────────────────
-
-LEVER_API_KEY = _get_lever_key()
 BASE_URL = "https://api.lever.co/v1"
 LEVER_HIRE_URL = "https://hire.lever.co/candidates/{}"
 NOW_MS = int(datetime.now(timezone.utc).timestamp() * 1000)
