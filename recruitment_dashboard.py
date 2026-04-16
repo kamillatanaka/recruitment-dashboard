@@ -135,23 +135,31 @@ def load_data():
     user_map  = {u["id"]: u.get("name", "Unknown") for u in users}
     stage_map = {s["id"]: s["text"] for s in _get_single("stages")}
 
-    def _fetch_posting_opps(pid):
-        opps = _get("opportunities", {"archived": "false", "posting_id": pid})
-        for o in opps:
-            o["_posting_id"] = pid
-        return opps
-
+    # Fetch ALL active opportunities in a single paginated call
+    all_opps = _get("opportunities", {"archived": "false"})
     active = []
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(_fetch_posting_opps, pid): pid for pid in posting_map}
-        for fut in as_completed(futures):
-            active.extend(fut.result())
+    for o in all_opps:
+        # Extract posting_id from first application (Lever returns app objects or IDs)
+        apps = o.get("applications") or []
+        pid = None
+        if apps:
+            first = apps[0]
+            pid = first.get("posting") if isinstance(first, dict) else None
+        if not pid:
+            # Some Lever configs expose posting directly on the opportunity
+            postings_field = o.get("postings") or []
+            pid = postings_field[0] if postings_field else None
+        o["_posting_id"] = pid
+        active.append(o)
 
     return postings, posting_map, user_map, stage_map, active
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_archived_for_posting(pid):
-    opps = _get("opportunities", {"archived": "true", "posting_id": pid})
+    try:
+        opps = _get("opportunities", {"archived": "true", "posting_id": pid})
+    except Exception:
+        opps = []
     for o in opps:
         o["_posting_id"] = pid
     return opps
@@ -377,7 +385,7 @@ if not LEVER_API_KEY:
     st.stop()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-with st.spinner("⏳ Loading data from Lever…"):
+with st.spinner("🦁 Loading data from Lever…"):
     try:
         postings, posting_map, user_map, stage_map, active = load_data()
     except Exception as e:
