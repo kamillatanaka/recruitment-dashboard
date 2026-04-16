@@ -84,20 +84,13 @@ BORDER = "#E8D9B5"
 # ── Country mapping ───────────────────────────────────────────────────────────
 
 _COUNTRY_KEYWORDS = {
-    "🇧🇷 Brazil":    ["brazil", "brasil", "são paulo", "sao paulo", "rio de janeiro",
-                      "belo horizonte", "brasilia", "brasília", "latam - brazil", "br"],
-    "🇲🇽 Mexico":    ["mexico", "méxico", "cdmx", "guadalajara", "monterrey"],
-    "🇨🇴 Colombia":  ["colombia", "bogotá", "bogota", "medellín", "medellin"],
-    "🇦🇷 Argentina": ["argentina", "buenos aires"],
-    "🇺🇸 USA":       ["usa", "united states", "new york", "san francisco", "chicago",
-                      "austin", "los angeles", "seattle", "boston", "remote - us",
-                      "remote, us", "us remote"],
-    "🇮🇳 India":     ["india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad",
-                      "chennai", "pune"],
-    "🌍 Europe":     ["europe", "uk", "united kingdom", "london", "berlin", "paris",
-                      "amsterdam", "madrid", "barcelona", "dublin", "lisbon", "lisboa",
-                      "rome", "milan", "warsaw", "stockholm", "remote - europe",
-                      "remote, europe"],
+    "🇧🇷 Brazil":    ["brazil", "brasil"],
+    "🇲🇽 Mexico":    ["mexico", "méxico"],
+    "🇨🇴 Colombia":  ["colombia"],
+    "🇦🇷 Argentina": ["argentina"],
+    "🇺🇸 USA":       ["usa", "united states"],
+    "🇮🇳 India":     ["india"],
+    "🌍 Europe":     ["europe", "uk", "united kingdom"],
 }
 
 def _map_country(location: str) -> str:
