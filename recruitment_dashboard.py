@@ -20,13 +20,20 @@ from requests.adapters import HTTPAdapter
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# ── Secrets: support both Streamlit Cloud (st.secrets) and local env vars ────
+def _get_lever_key():
+    try:
+        return st.secrets["LEVER_API_KEY"]
+    except Exception:
+        return os.environ.get("LEVER_API_KEY", "")
+
 
 def _lever_session():
     """Session that closes connections after each use to avoid LibreSSL EOF errors."""
     s = requests.Session()
     s.headers["Connection"] = "close"
     s.verify = False
-    s.auth = (os.environ.get("LEVER_API_KEY", ""), "")
+    s.auth = (_get_lever_key(), "")
     # Retry on connection errors (not SSL, handled separately)
     adapter = HTTPAdapter(max_retries=2)
     s.mount("https://", adapter)
@@ -34,7 +41,7 @@ def _lever_session():
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-LEVER_API_KEY = os.environ.get("LEVER_API_KEY", "")
+LEVER_API_KEY = _get_lever_key()
 BASE_URL = "https://api.lever.co/v1"
 LEVER_HIRE_URL = "https://hire.lever.co/candidates/{}"
 NOW_MS = int(datetime.now(timezone.utc).timestamp() * 1000)
