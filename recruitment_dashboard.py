@@ -129,6 +129,7 @@ def load_data():
             "department": cat.get("department") or "Unknown",
             "location":   cat.get("location") or "Unknown",
             "hm_id":      p.get("hiringManager"),
+            "owner_id":   p.get("owner"),
         }
 
     users     = _get("users")
@@ -190,11 +191,12 @@ def build_pipeline_df(active, posting_map, user_map, stage_map):
             "Days in Stage":  days,
             "Recruiter":      user_map.get(opp.get("owner"), "Unknown"),
             "Hiring Manager": user_map.get(post.get("hm_id"), "Unknown"),
+            "Director":       user_map.get(post.get("owner_id"), "Unknown"),
             "Archived":       False,
         })
 
     cols = ["Candidate", "Profile", "Role", "Team", "Stage",
-            "Days in Stage", "Recruiter", "Hiring Manager", "Archived"]
+            "Days in Stage", "Recruiter", "Hiring Manager", "Director", "Archived"]
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -394,16 +396,22 @@ with st.spinner("🦁 Loading data from Lever…"):
 
 pipeline_df = build_pipeline_df(active, posting_map, user_map, stage_map)
 
-_role_to_pids = defaultdict(list)
-_hm_to_pids   = defaultdict(list)
+_role_to_pids     = defaultdict(list)
+_hm_to_pids       = defaultdict(list)
+_director_to_pids = defaultdict(list)
 for _pid, _pdata in posting_map.items():
     _role_to_pids[_pdata["title"]].append(_pid)
     _hm_name = user_map.get(_pdata.get("hm_id"), "Unknown")
     if _hm_name != "Unknown":
         _hm_to_pids[_hm_name].append(_pid)
+    _dir_name = user_map.get(_pdata.get("owner_id"), "Unknown")
+    if _dir_name != "Unknown":
+        _director_to_pids[_dir_name].append(_pid)
 
-roles_all = sorted(r for r in pipeline_df["Role"].dropna().unique() if r != "Unknown")
-hms_all   = sorted(h for h in pipeline_df["Hiring Manager"].dropna().unique() if h != "Unknown")
+roles_all     = sorted(r for r in pipeline_df["Role"].dropna().unique() if r != "Unknown")
+hms_all       = sorted(h for h in pipeline_df["Hiring Manager"].dropna().unique() if h != "Unknown")
+recs_all      = sorted(r for r in pipeline_df["Recruiter"].dropna().unique() if r != "Unknown")
+directors_all = sorted(d for d in pipeline_df["Director"].dropna().unique() if d != "Unknown")
 
 # ── Header ────────────────────────────────────────────────────────────────────
 logo_b64  = _load_logo_b64()
@@ -440,17 +448,22 @@ vc1, vc2 = st.columns([2, 3])
 with vc1:
     view_mode = st.radio(
         "View",
-        ["🌐 All Positions", "💼 By Role", "👤 By Hiring Manager"],
+        ["🌐 All Positions", "💼 By Role", "👤 By Hiring Manager",
+         "👩‍💼 By Recruiter", "🎖️ By Director"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-sel_role, sel_hm = None, None
+sel_role, sel_hm, sel_rec, sel_director = None, None, None, None
 with vc2:
     if view_mode == "💼 By Role":
         sel_role = st.selectbox("Role", roles_all, label_visibility="collapsed")
     elif view_mode == "👤 By Hiring Manager":
         sel_hm = st.selectbox("Hiring Manager", hms_all, label_visibility="collapsed")
+    elif view_mode == "👩‍💼 By Recruiter":
+        sel_rec = st.selectbox("Recruiter", recs_all, label_visibility="collapsed")
+    elif view_mode == "🎖️ By Director":
+        sel_director = st.selectbox("Director", directors_all, label_visibility="collapsed")
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 if view_mode == "🌐 All Positions":
@@ -460,10 +473,20 @@ elif view_mode == "💼 By Role" and sel_role:
     vdf        = pipeline_df[pipeline_df["Role"] == sel_role].copy()
     v_postings = [p for p in postings
                   if posting_map.get(p["id"], {}).get("title") == sel_role]
-else:
-    vdf        = pipeline_df[pipeline_df["Hiring Manager"] == sel_hm].copy() if sel_hm else pipeline_df.copy()
+elif view_mode == "👤 By Hiring Manager" and sel_hm:
+    vdf        = pipeline_df[pipeline_df["Hiring Manager"] == sel_hm].copy()
     v_postings = [p for p in postings
-                  if user_map.get(posting_map.get(p["id"], {}).get("hm_id")) == sel_hm] if sel_hm else postings
+                  if user_map.get(posting_map.get(p["id"], {}).get("hm_id")) == sel_hm]
+elif view_mode == "👩‍💼 By Recruiter" and sel_rec:
+    vdf        = pipeline_df[pipeline_df["Recruiter"] == sel_rec].copy()
+    v_postings = postings  # recruiters span multiple postings
+elif view_mode == "🎖️ By Director" and sel_director:
+    vdf        = pipeline_df[pipeline_df["Director"] == sel_director].copy()
+    v_postings = [p for p in postings
+                  if user_map.get(posting_map.get(p["id"], {}).get("owner_id")) == sel_director]
+else:
+    vdf        = pipeline_df.copy()
+    v_postings = postings
 
 # ── KPI Cards ─────────────────────────────────────────────────────────────────
 _section_label("📈 Key Metrics")
@@ -594,7 +617,7 @@ with tab_pipeline:
                 with st.expander(f"**{stage}** · {len(sdf)} candidate(s){badge}", expanded=True):
                     st.dataframe(
                         sdf[["Candidate", "Profile", "Role", "Team",
-                             "Days in Stage", "Recruiter", "Hiring Manager"]],
+                             "Days in Stage", "Recruiter", "Hiring Manager", "Director"]],
                         use_container_width=True,
                         hide_index=True,
                         column_config={
@@ -637,8 +660,26 @@ with tab_kanban:
                 adf["Archived"] = True
                 kdf = pd.concat([kdf, adf[adf["Hiring Manager"] == sel_hm]], ignore_index=True)
 
+    elif view_mode == "👩‍💼 By Recruiter" and sel_rec:
+        kdf = vdf.copy()
+
+    elif view_mode == "🎖️ By Director" and sel_director:
+        kdf = vdf.copy()
+        if show_archived:
+            arch_opps = []
+            for pid in _director_to_pids.get(sel_director, []):
+                arch_opps.extend(load_archived_for_posting(pid))
+            if arch_opps:
+                adf = build_pipeline_df(arch_opps, posting_map, user_map, stage_map)
+                adf["Archived"] = True
+                kdf = pd.concat([kdf, adf[adf["Director"] == sel_director]], ignore_index=True)
+
     else:  # All Positions — needs sub-selector for kanban
-        k_view = st.radio("Kanban view", ["💼 By Role", "👤 By Hiring Manager"], horizontal=True)
+        k_view = st.radio(
+            "Kanban view",
+            ["💼 By Role", "👤 By Hiring Manager", "👩‍💼 By Recruiter", "🎖️ By Director"],
+            horizontal=True,
+        )
         if k_view == "💼 By Role":
             k_role = st.selectbox("Select Role", roles_all, key="kanban_role")
             kdf = pipeline_df[pipeline_df["Role"] == k_role].copy()
@@ -650,7 +691,7 @@ with tab_kanban:
                     adf = build_pipeline_df(arch_opps, posting_map, user_map, stage_map)
                     adf["Archived"] = True
                     kdf = pd.concat([kdf, adf[adf["Role"] == k_role]], ignore_index=True)
-        else:
+        elif k_view == "👤 By Hiring Manager":
             k_hm = st.selectbox("Select Hiring Manager", hms_all, key="kanban_hm")
             kdf = pipeline_df[pipeline_df["Hiring Manager"] == k_hm].copy()
             if show_archived:
@@ -661,6 +702,20 @@ with tab_kanban:
                     adf = build_pipeline_df(arch_opps, posting_map, user_map, stage_map)
                     adf["Archived"] = True
                     kdf = pd.concat([kdf, adf[adf["Hiring Manager"] == k_hm]], ignore_index=True)
+        elif k_view == "👩‍💼 By Recruiter":
+            k_rec = st.selectbox("Select Recruiter", recs_all, key="kanban_rec")
+            kdf = pipeline_df[pipeline_df["Recruiter"] == k_rec].copy()
+        else:
+            k_dir = st.selectbox("Select Director", directors_all, key="kanban_dir")
+            kdf = pipeline_df[pipeline_df["Director"] == k_dir].copy()
+            if show_archived:
+                arch_opps = []
+                for pid in _director_to_pids.get(k_dir, []):
+                    arch_opps.extend(load_archived_for_posting(pid))
+                if arch_opps:
+                    adf = build_pipeline_df(arch_opps, posting_map, user_map, stage_map)
+                    adf["Archived"] = True
+                    kdf = pd.concat([kdf, adf[adf["Director"] == k_dir]], ignore_index=True)
 
     if not show_sourcing:
         kdf = kdf[~kdf["Stage"].isin(SOURCING_STAGES)]
