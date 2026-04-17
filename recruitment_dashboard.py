@@ -110,7 +110,7 @@ def _get(endpoint, params=None):
         for attempt in range(3):
             try:
                 with _lever_session() as s:
-                    resp = s.get(f"{BASE_URL}/{endpoint}", params=p)
+                    resp = s.get(f"{BASE_URL}/{endpoint}", params=p, timeout=30)
                 if not resp.ok:
                     raise requests.exceptions.HTTPError(
                         f"HTTP {resp.status_code} on {endpoint}: {resp.text[:300]}",
@@ -130,7 +130,7 @@ def _get(endpoint, params=None):
 
 def _get_single(endpoint):
     with _lever_session() as s:
-        resp = s.get(f"{BASE_URL}/{endpoint}")
+        resp = s.get(f"{BASE_URL}/{endpoint}", timeout=30)
     resp.raise_for_status()
     return resp.json().get("data", [])
 
