@@ -137,7 +137,7 @@ def _get_single(endpoint):
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_data():
+def _load_postings():
     postings = _get("postings", {"state": "published"})
     posting_map = {}
     for p in postings:
@@ -152,29 +152,31 @@ def load_data():
             "hm_id":      p.get("hiringManager"),
             "owner_id":   p.get("owner"),
         }
+    return postings, posting_map
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_users_and_stages():
     users     = _get("users")
     user_map  = {u["id"]: u.get("name", "Unknown") for u in users}
     stage_map = {s["id"]: s["text"] for s in _get_single("stages")}
+    return user_map, stage_map
 
-    # Fetch ALL active opportunities in a single paginated call
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_opportunities():
     all_opps = _get("opportunities", {"archived": "false"})
     active = []
     for o in all_opps:
-        # Extract posting_id from first application (Lever returns app objects or IDs)
         apps = o.get("applications") or []
         pid = None
         if apps:
             first = apps[0]
             pid = first.get("posting") if isinstance(first, dict) else None
         if not pid:
-            # Some Lever configs expose posting directly on the opportunity
             postings_field = o.get("postings") or []
             pid = postings_field[0] if postings_field else None
         o["_posting_id"] = pid
         active.append(o)
-
-    return postings, posting_map, user_map, stage_map, active
+    return active
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_archived_for_posting(pid):
@@ -409,12 +411,16 @@ if not LEVER_API_KEY:
     st.stop()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-with st.spinner("🦁 Loading data from Lever…"):
-    try:
-        postings, posting_map, user_map, stage_map, active = load_data()
-    except Exception as e:
-        st.error(f"**API Error:** {e}")
-        st.stop()
+try:
+    with st.spinner("📋 Loading job postings…"):
+        postings, posting_map = _load_postings()
+    with st.spinner("👤 Loading users & stages…"):
+        user_map, stage_map = _load_users_and_stages()
+    with st.spinner("👥 Loading candidates…"):
+        active = _load_opportunities()
+except Exception as e:
+    st.error(f"**API Error:** {e}")
+    st.stop()
 
 pipeline_df = build_pipeline_df(active, posting_map, user_map, stage_map)
 
