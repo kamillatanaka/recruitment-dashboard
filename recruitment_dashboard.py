@@ -106,26 +106,26 @@ def _get(endpoint, params=None):
     results = []
     p = dict(params or {})
     p.setdefault("limit", 100)
-    while True:
-        for attempt in range(3):
-            try:
-                with _lever_session() as s:
+    with _lever_session() as s:
+        while True:
+            for attempt in range(3):
+                try:
                     resp = s.get(f"{BASE_URL}/{endpoint}", params=p, timeout=30)
-                if not resp.ok:
-                    raise requests.exceptions.HTTPError(
-                        f"HTTP {resp.status_code} on {endpoint}: {resp.text[:300]}",
-                        response=resp,
-                    )
+                    if not resp.ok:
+                        raise requests.exceptions.HTTPError(
+                            f"HTTP {resp.status_code} on {endpoint}: {resp.text[:300]}",
+                            response=resp,
+                        )
+                    break
+                except requests.exceptions.SSLError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(1)
+            body = resp.json()
+            results.extend(body.get("data", []))
+            if not body.get("hasNext"):
                 break
-            except requests.exceptions.SSLError:
-                if attempt == 2:
-                    raise
-                time.sleep(1)
-        body = resp.json()
-        results.extend(body.get("data", []))
-        if not body.get("hasNext"):
-            break
-        p["offset"] = urllib.parse.unquote(body["next"])
+            p["offset"] = urllib.parse.unquote(body["next"])
     return results
 
 def _get_single(endpoint):
