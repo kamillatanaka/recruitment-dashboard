@@ -24,15 +24,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
-def _get_lever_key():
+def _get_secret(key):
     try:
-        return st.secrets["LEVER_API_KEY"]
+        return st.secrets[key]
     except Exception:
-        return os.environ.get("LEVER_API_KEY", "")
+        return os.environ.get(key, "")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-LEVER_API_KEY = _get_lever_key()
+LEVER_API_KEY = _get_secret("LEVER_API_KEY")
 
 def _lever_session():
     s = requests.Session()
@@ -134,94 +134,60 @@ def _get_single(endpoint):
     resp.raise_for_status()
     return resp.json().get("data", [])
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# ── Supabase client ────────────────────────────────────────────────────────────
+
+from supabase import create_client as _sb_create
+
+def _supabase():
+    url = _get_secret("SUPABASE_URL")
+    key = _get_secret("SUPABASE_ANON_KEY")
+    return _sb_create(url, key)
+
+# ── Data loading (from Supabase) ───────────────────────────────────────────────
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_postings():
-    postings = _get("postings", {"state": "published"})
-    posting_map = {}
-    for p in postings:
-        cat = p.get("categories") or {}
-        loc = cat.get("location") or "Unknown"
-        posting_map[p["id"]] = {
-            "title":      p.get("text", "Unknown"),
-            "team":       cat.get("team") or "Unknown",
-            "department": cat.get("department") or "Unknown",
-            "location":   loc,
-            "country":    _map_country(loc),
-            "hm_id":      p.get("hiringManager"),
-            "owner_id":   p.get("owner"),
-        }
-    return postings, posting_map
+def load_from_supabase():
+    sb = _supabase()
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_users_and_stages():
-    users     = _get("users")
-    user_map  = {u["id"]: u.get("name", "Unknown") for u in users}
-    stage_map = {s["id"]: s["text"] for s in _get_single("stages")}
-    return user_map, stage_map
+    # Load candidates
+    resp = sb.table("candidates").select("*").execute()
+    candidates = resp.data or []
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_opportunities():
-    all_opps = _get("opportunities", {"archived": "false"})
-    active = []
-    for o in all_opps:
-        apps = o.get("applications") or []
-        pid = None
-        if apps:
-            first = apps[0]
-            pid = first.get("posting") if isinstance(first, dict) else None
-        if not pid:
-            postings_field = o.get("postings") or []
-            pid = postings_field[0] if postings_field else None
-        o["_posting_id"] = pid
-        active.append(o)
-    return active
+    # Load postings
+    resp2 = sb.table("postings").select("*").execute()
+    postings = resp2.data or []
+    posting_map = {p["id"]: p for p in postings}
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_archived_for_posting(pid):
-    try:
-        opps = _get("opportunities", {"archived": "true", "posting_id": pid})
-    except Exception:
-        opps = []
-    for o in opps:
-        o["_posting_id"] = pid
-    return opps
+    # Load last sync time
+    resp3 = sb.table("sync_log").select("synced_at, candidate_count").eq("id", 1).execute()
+    sync_info = resp3.data[0] if resp3.data else {}
+
+    return candidates, posting_map, sync_info
 
 # ── Data transformations ──────────────────────────────────────────────────────
 
-def build_pipeline_df(active, posting_map, user_map, stage_map):
-    rows = []
-    for opp in active:
-        pid  = opp.get("_posting_id")
-        post = posting_map.get(pid, {})
-
-        stage_raw = opp.get("stage") or {}
-        if isinstance(stage_raw, dict):
-            stage_name = stage_raw.get("text") or stage_map.get(stage_raw.get("id"), "Unknown")
-        else:
-            stage_name = stage_map.get(stage_raw, "Unknown")
-
-        changed_ms = opp.get("stageChangedAt") or opp.get("updatedAt") or NOW_MS
-        days = max(0, round((NOW_MS - changed_ms) / 86_400_000))
-
-        rows.append({
-            "Candidate":      opp.get("name", "Unknown"),
-            "Profile":        LEVER_HIRE_URL.format(opp["id"]),
-            "Role":           post.get("title", "Unknown"),
-            "Team":           post.get("team", "Unknown"),
-            "Stage":          stage_name,
-            "Days in Stage":  days,
-            "Recruiter":      user_map.get(opp.get("owner"), "Unknown"),
-            "Hiring Manager": user_map.get(post.get("hm_id"), "Unknown"),
-            "Director":       user_map.get(post.get("owner_id"), "Unknown"),
-            "Country":        post.get("country", "🌐 Other"),
-            "Archived":       False,
-        })
-
+def build_pipeline_df(candidates):
+    """Build pipeline DataFrame from Supabase candidate rows (already resolved)."""
     cols = ["Candidate", "Profile", "Role", "Team", "Stage",
             "Days in Stage", "Recruiter", "Hiring Manager", "Director", "Country", "Archived"]
-    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+    if not candidates:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for c in candidates:
+        rows.append({
+            "Candidate":      c.get("candidate", "Unknown"),
+            "Profile":        c.get("profile_url", ""),
+            "Role":           c.get("role", "Unknown"),
+            "Team":           c.get("team", "Unknown"),
+            "Stage":          c.get("stage", "Unknown"),
+            "Days in Stage":  c.get("days_in_stage", 0),
+            "Recruiter":      c.get("recruiter", "Unknown"),
+            "Hiring Manager": c.get("hiring_manager", "Unknown"),
+            "Director":       c.get("director", "Unknown"),
+            "Country":        c.get("country", "Other"),
+            "Archived":       c.get("archived", False),
+        })
+    return pd.DataFrame(rows, columns=cols)
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
 
@@ -406,35 +372,19 @@ hr { border-color: #E8D9B5 !important; }
 """, unsafe_allow_html=True)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
-if not LEVER_API_KEY:
-    st.error("⚠️ **LEVER_API_KEY** is not configured.")
+if not _get_secret("SUPABASE_URL"):
+    st.error("⚠️ **SUPABASE_URL** is not configured in Streamlit secrets.")
     st.stop()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 try:
-    with st.spinner("📋 Loading job postings…"):
-        postings, posting_map = _load_postings()
-    with st.spinner("👤 Loading users & stages…"):
-        user_map, stage_map = _load_users_and_stages()
-    with st.spinner("👥 Loading candidates…"):
-        active = _load_opportunities()
+    with st.spinner("🦁 Loading dashboard…"):
+        candidates, posting_map, sync_info = load_from_supabase()
 except Exception as e:
-    st.error(f"**API Error:** {e}")
+    st.error(f"**Database Error:** {e}")
     st.stop()
 
-pipeline_df = build_pipeline_df(active, posting_map, user_map, stage_map)
-
-_role_to_pids     = defaultdict(list)
-_hm_to_pids       = defaultdict(list)
-_director_to_pids = defaultdict(list)
-for _pid, _pdata in posting_map.items():
-    _role_to_pids[_pdata["title"]].append(_pid)
-    _hm_name = user_map.get(_pdata.get("hm_id"), "Unknown")
-    if _hm_name != "Unknown":
-        _hm_to_pids[_hm_name].append(_pid)
-    _dir_name = user_map.get(_pdata.get("owner_id"), "Unknown")
-    if _dir_name != "Unknown":
-        _director_to_pids[_dir_name].append(_pid)
+pipeline_df = build_pipeline_df(candidates)
 
 roles_all     = sorted(r for r in pipeline_df["Role"].dropna().unique() if r != "Unknown")
 hms_all       = sorted(h for h in pipeline_df["Hiring Manager"].dropna().unique() if h != "Unknown")
@@ -465,9 +415,11 @@ with hcol2:
         st.cache_data.clear()
         st.rerun()
 
+_synced_at = sync_info.get("synced_at", "")[:16].replace("T", " ") if sync_info else "—"
+_active_count = len(pipeline_df[~pipeline_df["Archived"]])
 st.caption(
-    f"🕐 Last updated: {datetime.now().strftime('%b %d, %Y · %H:%M')} &nbsp;·&nbsp; "
-    f"**{len(active)}** active candidates &nbsp;·&nbsp; **{len(postings)}** open reqs"
+    f"🕐 Data synced: {_synced_at} UTC &nbsp;·&nbsp; "
+    f"**{_active_count}** active candidates &nbsp;·&nbsp; **{len(posting_map)}** open reqs"
 )
 
 # ── Hardcoded view: Sales Manager · Brazil ────────────────────────────────────
@@ -583,26 +535,12 @@ with tab_kanban:
     show_archived = candidate_status == "Archived Candidates"
 
     if show_archived:
-        # Load archived candidates for the posting(s) in the current filter
-        pids_in_view = pipeline_df[
-            pipeline_df["Role"].str.contains("Sales Manager", case=False, na=False) &
-            (pipeline_df["Country"] == "🇧🇷 Brazil")
-        ]["Role"].map(
-            {v["title"]: k for k, v in posting_map.items()}
-        ).dropna().unique().tolist()
-        arch_opps = []
-        for pid in pids_in_view:
-            arch_opps.extend(load_archived_for_posting(pid))
-        if arch_opps:
-            kdf = build_pipeline_df(arch_opps, posting_map, user_map, stage_map)
-            kdf["Archived"] = True
-            # apply same filter
-            kdf = kdf[
-                kdf["Role"].str.contains("Sales Manager", case=False, na=False) &
-                (kdf["Country"] == "🇧🇷 Brazil")
-            ].copy()
-        else:
-            kdf = pd.DataFrame(columns=vdf.columns)
+        # Archived candidates are already in Supabase (archived=True)
+        kdf = build_pipeline_df([c for c in candidates if c.get("archived")])
+        kdf = kdf[
+            kdf["Role"].str.contains("Sales Manager", case=False, na=False) &
+            (kdf["Country"] == "Brazil")
+        ].copy()
     else:
         kdf = vdf.copy()
 
